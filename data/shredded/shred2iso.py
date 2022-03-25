@@ -123,7 +123,7 @@ def process_star(fname):
 
     bh = bhinfo(fname, ds.current_time)
 
-    ds.periodicity = (True, True, True)  # allow computing ghost zones in case smoothing is on
+    ds.force_periodicity()  # allow computing ghost zones in case smoothing is on
 
     dims = [ 8 << level ] * 3  # it's a FLASH file, with 8x8x8 blocks, so covering grid size is 8 * 2^level on each axis
     if smoothed:
