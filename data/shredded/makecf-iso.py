@@ -22,11 +22,23 @@ nnnns.sort()
 
 
 print("#! /usr/bin/env partiview\n")
+
+print("object g1=time")
+print("tfm camera -.4 -.15 -1.5  0 0 0")
+print("eval laxes off")
+print("eval lsize 0.1")
+
+for itime, nnnn in enumerate(nnnns):
+    print('datatime %d' % itime)
+    print('0 0 0 text %s' % nnnn)
+    
  
 for i, isoval in enumerate(isovals):
     isocolor = isocolors[i % len(isocolors)]
-    print("object g%d=iso%s" % (i+1, isoval))
+    print("object g%d=iso%s" % (i+2, isoval))
     print("")
     for itime, nnnn in enumerate(nnnns):
         print("waveobj -c %d -time %d %s%s.%s.obj" % (isocolor, itime, stem, isoval, nnnn))
     print("")
+
+print("eval alpha 0.1") # on last (outermost) isossurface
