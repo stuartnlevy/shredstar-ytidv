@@ -1,12 +1,13 @@
-#! /gd/home/src/anaconda3/envs/py38/bin/python3
-
-#!/usr/bin/env python3
+#! /gd/home/src/anaconda3/bin/python3
 
 import sys, os
 import yt
 import numpy
 import re
 import skimage.measure
+
+import glob
+from numpy.polynomial import Chebyshev, Polynomial, Hermite
 
 #sys.path.append('/fe3/demmapping/scripts')
 #import pbio
@@ -43,23 +44,182 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
         level = int( sys.argv[ii] ); ii += 1
     elif opt == '-ogrid':
         outgrid = True
-    elif opt == '-fixbh':
+    elif opt.startswith('-fixbh'):
         fixbh = True
+        if '=' in opt:
+            fixbh = [float(t) for t in opt.split('=')[1].split(',')]
     elif opt == '-n':
         doit = False
     else:
         ii = len(sys.argv)
 
 if ii >= len(sys.argv):
-    print("""Usage: %s [-o outstem] [-q quantile=qlabel,quantile2=qlabel2,...] [-fixbh] [-l level] m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_0200 ...
+    print("""Usage: %s [-o outstem] [-q quantile=qlabel,quantile2=qlabel2,...] [-fixbh[=t0,t1]] [-l level] m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_0200 ...
 Convert shredded-star gas density to isosurface(s) in .obj form.
  -o outstem  (-o bden) writes to <outstem>.NNNN.vdb
  -l amrgridlevel (-l 5  which yields 256^3 grid)
  -q quant   (-q 0.01)
- -fixbh     (if given, translate so that black hole is at (0,0,0))""" % sys.argv[0], file=sys.stderr)
+ -fixbh     (if given, translate so that black hole is at (0,0,0))
+ -fixbh=keyfile 
+  where keyfile contains
+     t0 w_bh w_star
+     t1 w_bh w_star  """ % sys.argv[0], file=sys.stderr)
     sys.exit(1)
 
 framepat = re.compile('_(\d\d\d\d)$')
+
+
+class BHInfo(object):
+    def __init__(self, datafilename):
+
+        self.bhents = None
+        self.starents = None
+
+        self.inhale(datafilename)  # read position data 
+
+    def inhale(self, datafilename):
+
+        # Given one data file's name, find the Black Hole etc. tracking info in the same directory.
+        self.bhfname = os.path.join( os.path.dirname(datafilename), "sinks_evol.dat" )
+        if not os.path.exists(self.bhfname):
+            raise OSError("BHInfo(): Can't find BH info file %s" % self.bhfname)
+
+        with open(self.bhfname, 'rb') as inf:
+            # [00]part_tag         [01]time         [02]posx         [03]posy         [04]posz         [05]velx         [06]vely         [07]velz       [08]accelx       [09]accely       [10]accelz        [11]anglx        [12]angly        [13]anglz         [14]mass         [15]mdot        [16]ptime
+            bhents = []
+            starents = []
+            for line in inf.readlines():
+                try:
+                    vv = [float(v) for v in line.split()]
+                    if vv[0] == 131072:
+                        bhents.append( vv )
+                    elif vv[0] == 65536:
+                        starents.append( vv )
+                except:
+                    pass
+        self.bhents = numpy.array(bhents)
+        self.starents = numpy.array(starents)
+
+
+    def use_interval(self, t0, t1):
+        # xbh(t)
+        # xstar(t)
+        ## xT(t)' = xbh(t)' for t<=t0
+        ## xT(t)' = xstar(t)' (~0) for t>=t1
+        ## xT(t)' = smoothstep(xbh', xstar', t0, t1) for t0<t<t1
+        ## xT(t) - xT(t0) = integral 
+
+
+        # construct translation curve
+
+        cachef = self.bhfname + ".cache.npz"
+
+        # there might be a cached file with a time curve in it
+
+        if os.path.exists(cachef):
+            cache = numpy.load( cachef )
+            self.ctrange = cache['trange']
+            self.ctimes = cache['times']
+            self.csteps = cache['steps']
+            self.ctrans = cache['translate']
+            return
+
+        # Calibrate timestep->time mapping.   This involves opening lots of yt datasets.
+        yt.set_log_level('warning')
+
+        allfiles = sorted( glob.glob( os.path.join( os.path.dirname(self.bhfname), "multitidal_hdf5_plt_cnt_????" ) ) )
+        allsteps = []
+        for fi in allfiles:
+            m = framepat.search(fi)
+            if m is None:
+                continue
+            allsteps.append( int( m.group(1) ) )
+
+        i0, i1 = numpy.searchsorted( allsteps, [t0, t1] )
+        i0 = max( 0, i0-1 )
+        i1 = min( len(allsteps)-1, i1+1 )
+            
+        samples = {}
+        steps = []
+        stimes = []
+        sbhposs = []
+        sstarposs = []
+        for fi in allfiles[i0:i1+1]:
+            stime = None
+            m = framepat.search(fi)
+            if m is None:
+                continue
+            sstep = int( m.group(1) )
+
+            try:
+                sds = yt.load( fi )
+                stime = float(sds.current_time.d)
+                bhi = self.bhinfo_at_time(stime, fi)
+                if abs(stime - bhi['time']) < 20:
+                    steps.append(sstep)
+                    stimes.append(bhi['time'])  # approximately equal to stime
+                    sbhposs.append(bhi['pos'])
+                    sstarposs.append(bhi['starpos'])
+                del sds
+            except OSError as e:
+                print("# use_interval(): Not fitting troublesome timestep %d  (time %s) %s: %s" % (sstep, stime, fi, e))
+
+
+        yt.set_log_level('info')
+
+        sbhposs = numpy.array(sbhposs)
+        sstarposs = numpy.array(sstarposs)
+
+        myPoly = Chebyshev
+        polydegree = min( len(steps)//3 + 1, len(steps)-1 )
+        pbh = [ myPoly.fit( steps, sbhposs[:,i], deg=polydegree ) for i in range(3) ]
+        pstar = [ myPoly.fit( steps, sstarposs[:,i], deg=polydegree ) for i in range(3) ]
+
+        import pickle
+        with open( self.bhfname + '.cache.pickle', 'wb') as picklef:
+            pickle.dump( dict(pbh=pbh, pstar=pstar, sbhposs=sbhposs, sstarposs=sstarposs, steps=steps, stimes=stimes), picklef )
+
+        # check fit
+        print("# Worst fits to pbh:", end="")
+        for i in range(3):
+            aa = numpy.array( [(pbh[i](step) - sbhposs[k,i]) for (k, step) in enumerate(steps)] )
+            imin, imax = numpy.argmin(aa), numpy.argmax(aa)
+            print(" {%g,%g}" % (aa[imin], aa[imax]), end="")
+        print("")
+        
+        # construct translation history
+        translate = numpy.zeros((len(stimes),3))  # XXX stub
+
+        numpy.savez( cachef, trange=numpy.array([t0,t1]), times=stimes, steps=steps, translate=translate )
+        
+    def bhinfo_at_time(self, time, fromfile=None):
+
+        if hasattr(time, 'd'):
+            time = time.d
+
+        tick = numpy.searchsorted( self.bhents[:,1], time )
+        if tick < len(self.bhents)-1 and self.bhents[tick,1] < self.bhents[tick+1,1]:
+            tick += (time - self.bhents[tick,1]) / (self.bhents[tick+1,1] - self.bhents[tick,1])
+        dd = self.bhinfo_at_tick(tick)
+
+        # debuggg
+        whence = "" if fromfile is None else " for frame " + fromfile[-4:]
+        print("# sought time %g found %g (delta = %g, tick %g)%s" % (time, dd['time'], dd['time']-time, tick, whence))
+
+        return dd
+
+        
+    def bhinfo_at_tick(self, tick):
+
+        nents = min( len(self.bhents), len(self.starents) )
+        ii = min( int(tick), nents-1 )
+        bhent = self.bhents[ii]
+        starent = self.starents[ii]
+        if tick != int(tick) and tick < nents-1:
+            bhent = bhent + (tick - int(tick))*(self.bhents[ii+1] - bhent)  # bhent + ... rather than += ... -- be sure not to alter bhents[] array.
+            starent = starent + (tick - int(tick))*(self.starents[ii+1] - starent)
+        dd = dict(time=bhent[1], pos=bhent[2:5], mdot=bhent[15], starpos=starent[2:5])
+        return dd
 
 
 if quants == []:
@@ -92,37 +252,6 @@ def grid2iso(grid, outobjname, field='density', left_edge=[0,0,0], right_edge=[1
     print(f"Wrote {len(faces)} triangles cells to {outobjname} with {field} >= {vmin:g} in {int(dt*1000)} ms")
 
 
-def bhinfo(fname, time):
-
-    if hasattr(time, 'd'):
-        time = time.d
-
-    f = os.path.join( os.path.dirname(fname), "sinks_evol.dat" )
-    if not os.path.exists(f):
-        return None
-
-    with open(f, 'rb') as inf:
-        # [00]part_tag         [01]time         [02]posx         [03]posy         [04]posz         [05]velx         [06]vely         [07]velz       [08]accelx       [09]accely       [10]accelz        [11]anglx        [12]angly        [13]anglz         [14]mass         [15]mdot        [16]ptime
-        bhents = []
-        starents = []
-        for line in inf.readlines():
-            try:
-                vv = [float(v) for v in line.split()]
-                if vv[0] == 131072:
-                    bhents.append( vv )
-                elif vv[0] == 65536:
-                    starents.append( vv )
-            except:
-                pass
-    bhents = numpy.array(bhents)
-    starents = numpy.array(starents)
-
-    ii = numpy.searchsorted( bhents[:,1], time )
-    bhent = bhents[ii]
-    starent = starents[ii]
-    print("# sought time %g found %g (delta = %g)" % (time, bhent[1], bhent[1]-time))
-    return dict(time=bhent[1], pos=bhent[2:5], mdot=bhent[15], starpos=starent[2:5])
-
 
 def mkdirfor(path):
     dirname, fname = os.path.split(path)
@@ -142,10 +271,15 @@ def process_star(fname):
 
     framestr = m.group(1)
 
+    bhi = BHInfo(fname)
+
+    if isinstance(fixbh, (list,tuple)):
+        bhi.use_interval( fixbh[0], fixbh[1] )
+
     ds = yt.load( fname )
     ## ad = ds.all_data()
 
-    bh = bhinfo(fname, ds.current_time)
+    bh = bhi.bhinfo_at_time(ds.current_time)
 
     # allow computing ghost zones in case smoothing is on, even though we may be lying about the data.
     if hasattr(ds, 'force_periodicity'):
@@ -210,3 +344,5 @@ def process_star(fname):
 ### main ###
 
 process_star( sys.argv[ii] )
+
+
