@@ -24,6 +24,7 @@ outgrid = True
 thresh = 3e-11
 smoothed = False
 fixbh = False
+outcurve = None
 doit = True
 
 while ii < len(sys.argv) and sys.argv[ii][0] == '-':
@@ -46,6 +47,8 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
         level = int( sys.argv[ii] ); ii += 1
     elif opt == '-ogrid':
         outgrid = True
+    elif opt == '-outcurve':
+        outcurve = sys.argv[ii]; ii += 1
     elif opt.startswith('-fixbh'):
         fixbh = True
         if '=' in opt:
@@ -76,6 +79,8 @@ class BHInfo(object):
         self.bhents = None
         self.starents = None
 
+        self.sample_ds = yt.load(datafilename)
+
         self.inhale(datafilename)  # read position data 
 
 
@@ -103,7 +108,8 @@ class BHInfo(object):
         self.starents = numpy.array(starents)
 
 
-    _interval_fields = ['srange', 'times', 'steps', 'pbh', 'pstar', 'ptranslate']
+    _interval_fields = ['srange', 'times', 'steps', 'pbh', 'pstar', 'ptranslate', 'pbh_S0offset', 'info_version']
+    info_version = '0.8';
 
     def _load_interval_info(self, S0,S1):
 
@@ -119,6 +125,9 @@ class BHInfo(object):
 
         if S0 is not None and tuple(cache['srange']) != (S0,S1):
             # Cache exists but spans wrong datastep range
+            return False
+
+        if 'info_version' not in cache or cache['info_version'] != self.info_version:
             return False
 
         for field in self._interval_fields:
@@ -160,7 +169,7 @@ class BHInfo(object):
         stimes = []
         sbhposs = []
         sstarposs = []
-        for fi in allfiles[i0:i1+1]:
+        for fi in allfiles[0:i1+1]:
             stime = None
             m = framepat.search(fi)
             if m is None:
@@ -187,13 +196,14 @@ class BHInfo(object):
         yt.set_log_level('info')
 
         self.srange = (S0, S1)
+        self.sdomain = ( min(S0,steps[0]), S1 )
         self.times = stimes
         self.steps = steps
 
         myPoly = Chebyshev
         polydegree = min( max(3, len(steps)//3 + 1), len(steps)-1 )
-        self.pbh = [ myPoly.fit( steps, bhposs[:,i], deg=polydegree, domain=[S0,S1], window=[-1,1] ) for i in range(3) ]
-        self.pstar = [ myPoly.fit( steps, starposs[:,i], deg=polydegree, domain=[S0,S1], window=[-1,1] ) for i in range(3) ]
+        self.pbh = [ myPoly.fit( steps, bhposs[:,i], deg=polydegree, domain=self.sdomain, window=[-1,1] ) for i in range(3) ]
+        self.pstar = [ myPoly.fit( steps, starposs[:,i], deg=polydegree, domain=self.sdomain, window=[-1,1] ) for i in range(3) ]
 
 
         # solve
@@ -204,10 +214,17 @@ class BHInfo(object):
         
         # all the p*'s are functions of datastep-number s
         psx = Polynomial([-S0/(S1-S0), 1/(S1-S0)], domain=[0,1], window=[0,1]) # linear map S0->0, S1->1, linear in between
-        psxS = psx.convert( kind=myPoly, domain=[S0,S1], window=[-1,1] )  # same linear map, converted to same domain as pbh and pstar
+        psxS = psx.convert( kind=myPoly, domain=self.sdomain, window=[-1,1] )  # same linear map, converted to same domain as pbh and pstar
         plerpS = psxS**2 * (3 - 2*psxS)  # lerp(t,0,1) = 3t^2 - 2t^3 :: plerp(s) : S0->0, S1->1, cubic smoothstep in between
         ptprimeS = [ plerpS*(self.pbh[i].deriv()) + (1-plerpS)*(self.pstar[i].deriv()) for i in range(3) ]  # rate of change of translation: blending smoothly from pbh' to pstar'
         self.ptranslate = [ ptprimeS[i].integ(m=1, lbnd=S1) for i in range(3) ]  # ptranslate(s) = definite integral (from S1 to s) of ptprimeS.  Translation is 0 at s=S1.
+
+        # calibrate what we'll use before and after the [S0,S1] window
+        # before: stick with integral of BH position  (so we've extended the poly fit to include data as early as provided)
+        # after: zero velocity, same translation as at s=S1
+
+        # What's the difference between our ptranslate at s=S0 vs black hole interpolated position pbh at same time?
+        self.pbh_S0offset = numpy.array([ self.ptranslate[i](S0) - self.pbh[i](S0) for i in range(3) ])
 
         # check fit
         for ppoly, pname, poss in [ (self.pbh,'pbh',bhposs), (self.pstar,'pstar',starposs) ]:
@@ -225,20 +242,31 @@ class BHInfo(object):
             self._measure_interval(S0,S1)
             self._save_interval_info()
 
+    def mapped(self, p):
+        # map domain box to 0..1
+        return (numpy.array(p) - self.sample_ds.domain_left_edge.d) / (self.sample_ds.domain_right_edge.d - self.sample_ds.domain_left_edge.d)
+
     def translation_at(self, step):
         if self.srange is None:
             return numpy.zeros(3)
 
-        if step <= self.srange[0]:
-            pass
+        S0, S1 = self.srange
 
-        elif step >= self.srange[1]:
-            pass
+        if step <= S0:
+            # Before S0: track Black Hole using our interpolation curve, with constant offset for continuity after s=S0
+            tr = [ self.pbh[i](step) + self.pbh_S0offset[i] for i in range(3) ]
+
+        elif step >= S1:
+            # After S1: since the star is stationary in sim coords, we track it by just keeping translation constant after s=S1
+            tr = [ self.ptranslate[i](S1) for i in range(3) ]
 
         else:
-            return numpy.array( [ self.ptranslate[i](step) for i in range(3) ] )
+            # use our interpolant between the two interpolating polynomials
+            tr = [ self.ptranslate[i](step) for i in range(3) ]
 
-        
+        return numpy.array( tr )
+
+
     def bhinfo_at_time(self, time, fromfile=None):
 
         if hasattr(time, 'd'):
@@ -317,10 +345,11 @@ def process_star(fname):
     mkdirfor(outstem)
 
     framestr = m.group(1)
+    step = int(framestr)
 
     bhi = BHInfo(fname)
 
-    if isinstance(fixbh, (list,tuple)):
+    if isinstance(fixbh, (list,tuple,numpy.array)):
         bhi.use_interval( fixbh[0], fixbh[1] )
 
     ds = yt.load( fname )
@@ -353,10 +382,6 @@ def process_star(fname):
         vmax = 1
         bden = None
 
-    def mapped(p):
-        # map domain box to 0..1
-        return (numpy.array(p) - ds.domain_left_edge.d) / (ds.domain_right_edge.d - ds.domain_left_edge.d)
-
     for ((quant, qstr), vthresh) in zip(quants, vthreshes):
         outname = '%s%s_%d.%s.obj' % (outstem, qstr, level, framestr)
      
@@ -366,12 +391,13 @@ def process_star(fname):
             if bh is None:
                 raise ValueError("Can't fix black hole position -- no sinks_evol.dat data")
 
-            translate = - mapped(bh['pos'])
+            old_translate = - bhi.mapped(bh['pos'])
+            translate = - bhi.mapped( bhi.translation_at( step ) )
             def ggg(v):
                 return "%g %g %g" % tuple(v)
-            print(f"# frame {framestr} translate {ggg(translate)} = - bhpos {ggg(mapped(bh['pos']))} ( - bhpos {ggg(bh['pos']/1e13)})")
+            print(f"# frame {framestr} translate {ggg(translate)} was {ggg(old_translate)}")
         else:
-            translate = numpy.array([0,0,0])
+            new_translate = numpy.array([0,0,0])
 
         if doit:
             grid2iso( bden, outname, vmin=vthresh, translate=translate )
@@ -382,7 +408,7 @@ def process_star(fname):
         outbhspeck = outname.replace('.obj','') + '.bh.speck'
         with open(outbhspeck,'w') as speckf:
             print("# time %g" % bh['time'], file=speckf)
-            print("%.11g %.11g %.11g" % tuple( mapped(bh['pos']) + translate ), "%g" % bh['mdot'], file=speckf )
+            print("%.11g %.11g %.11g" % tuple( bhi.mapped(bh['pos']) + translate ), "%g" % bh['mdot'], file=speckf )
         
 
     del ds, bden
@@ -390,6 +416,20 @@ def process_star(fname):
 
 ### main ###
 
-process_star( sys.argv[ii] )
+bhdatafile = sys.argv[ii]
+
+if outcurve:
+    bhi = BHInfo(bhdatafile)
+    if bhi._load_interval_info(None,None):
+        with open(outcurve, 'w') as curvef:
+            print("# -fixbh=%g,%g  %s" % (*bhi.srange, bhdatafile), file=curvef)
+            for step in numpy.arange(bhi.steps[0], bhi.steps[-1]+1):
+                t = bhi.mapped( bhi.translation_at( step ) )
+                tbh = bhi.mapped( [ bhi.pbh[i](step) for i in range(3) ] )
+                print("%04d\t%10g  %10g  %10g\t%10g %10g %10g" % (step, *t, *tbh), file=curvef)
+        print("Wrote to %s translation curve steps %04d .. %04d , tracking BH to %g and star after %g, from %s" % (outcurve, bhi.steps[0],bhi.steps[-1], *bhi.srange, bhdatafile))
+
+else:
+    process_star( bhdatafile )
 
 
