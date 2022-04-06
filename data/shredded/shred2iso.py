@@ -117,7 +117,7 @@ class BHInfo(object):
         with open(cachef, 'rb') as picklef:
             cache = pickle.load(picklef)
 
-        if S0 is not None and cache['srange'] != tuple(S0,S1):
+        if S0 is not None and tuple(cache['srange']) != (S0,S1):
             # Cache exists but spans wrong datastep range
             return False
 
