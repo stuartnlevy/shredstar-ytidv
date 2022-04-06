@@ -223,7 +223,7 @@ class BHInfo(object):
         psx = Polynomial([-S0/(S1-S0), 1/(S1-S0)], domain=[0,1], window=[0,1]) # linear map S0->0, S1->1, linear in between
         psxS = psx.convert( kind=myPoly, domain=self.sdomain, window=[-1,1] )  # same linear map, converted to same domain as pbh and pstar
         plerpS = psxS**2 * (3 - 2*psxS)  # lerp(t,0,1) = 3t^2 - 2t^3 :: plerp(s) : S0->0, S1->1, cubic smoothstep in between
-        ptprimeS = [ plerpS*(self.pbh[i].deriv()) + (1-plerpS)*(self.pstar[i].deriv()) for i in range(3) ]  # rate of change of translation: blending smoothly from pbh' to pstar'
+        ptprimeS = [ (1-plerpS)*(self.pbh[i].deriv()) + plerpS*(self.pstar[i].deriv()) for i in range(3) ]  # rate of change of translation: blending smoothly from pbh' to pstar'
         self.ptranslate = [ ptprimeS[i].integ(m=1, lbnd=S1) for i in range(3) ]  # ptranslate(s) = definite integral (from S1 to s) of ptprimeS.  Translation is 0 at s=S1.
 
         # calibrate what we'll use before and after the [S0,S1] window
