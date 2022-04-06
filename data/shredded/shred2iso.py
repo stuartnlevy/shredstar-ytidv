@@ -147,18 +147,25 @@ class BHInfo(object):
         with open(cachef, 'wb') as picklef:
             pickle.dump( dd, picklef )
 
-    def _measure_interval(self, S0, S1):
+    def _measure_interval(self, S0, S1, stepspacing=1):
 
         # Calibrate timestep->time mapping.   This involves opening lots of yt datasets.
         yt.set_log_level('warning')
 
-        allfiles = sorted( glob.glob( os.path.join( os.path.dirname(self.bhfname), "multitidal_hdf5_plt_cnt_????" ) ) )
+        filelist = sorted( glob.glob( os.path.join( os.path.dirname(self.bhfname), "multitidal_hdf5_plt_cnt_????" ) ) )
+        allfiles = []
         allsteps = []
-        for fi in allfiles:
+        for fi in filelist:
             m = framepat.search(fi)
             if m is None:
                 continue
-            allsteps.append( int( m.group(1) ) )
+            step = int( m.group(1) )
+            if stepspacing <= 1 or len(allsteps)==0 or step - allsteps[-1] >= stepspacing:
+                allsteps.append( step )
+                allfiles.append( fi )
+
+        if stepspacing > 1:
+            ss = []
 
         i0, i1 = numpy.searchsorted( allsteps, [S0, S1] )
         i0 = max( 0, i0-1 )
@@ -236,10 +243,10 @@ class BHInfo(object):
             print("")
 
 
-    def use_interval(self, S0, S1):
+    def use_interval(self, S0, S1, redo=False, stepspacing=1):
 
-        if not self._load_interval_info(S0,S1):
-            self._measure_interval(S0,S1)
+        if redo or not self._load_interval_info(S0,S1):
+            self._measure_interval(S0,S1,stepspacing=stepspacing)
             self._save_interval_info()
 
     def mapped(self, p):
@@ -419,7 +426,12 @@ def process_star(fname):
 bhdatafile = sys.argv[ii]
 
 if outcurve:
+
     bhi = BHInfo(bhdatafile)
+
+    if fixbh not in [False,True]:
+        bhi.use_interval( *fixbh )
+        
     if bhi._load_interval_info(None,None):
         with open(outcurve, 'w') as curvef:
             print("# -fixbh=%g,%g  %s" % (*bhi.srange, bhdatafile), file=curvef)
