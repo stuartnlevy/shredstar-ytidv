@@ -6,6 +6,8 @@ import numpy
 import re
 import skimage.measure
 
+import pickle
+
 import glob
 from numpy.polynomial import Chebyshev, Polynomial, Hermite
 
@@ -54,16 +56,15 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
         ii = len(sys.argv)
 
 if ii >= len(sys.argv):
-    print("""Usage: %s [-o outstem] [-q quantile=qlabel,quantile2=qlabel2,...] [-fixbh[=t0,t1]] [-l level] m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_0200 ...
+    print("""Usage: %s [-o outstem] [-q quantile=qlabel,quantile2=qlabel2,...] [-fixbh[=s0,s1]] [-l level] m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_0200 ...
 Convert shredded-star gas density to isosurface(s) in .obj form.
  -o outstem  (-o bden) writes to <outstem>.NNNN.vdb
  -l amrgridlevel (-l 5  which yields 256^3 grid)
  -q quant   (-q 0.01)
  -fixbh     (if given, translate so that black hole is at (0,0,0))
- -fixbh=keyfile 
-  where keyfile contains
-     t0 w_bh w_star
-     t1 w_bh w_star  """ % sys.argv[0], file=sys.stderr)
+ -fixbh=s0,s1 --- smoothly interpolate from tracking BH to tracking star during datastep range s0 ... s1.
+    Star ends up at 0,0,0 at times >= s1.
+ """ % sys.argv[0], file=sys.stderr)
     sys.exit(1)
 
 framepat = re.compile('_(\d\d\d\d)$')
@@ -76,6 +77,7 @@ class BHInfo(object):
         self.starents = None
 
         self.inhale(datafilename)  # read position data 
+
 
     def inhale(self, datafilename):
 
@@ -101,28 +103,42 @@ class BHInfo(object):
         self.starents = numpy.array(starents)
 
 
-    def use_interval(self, t0, t1):
-        # xbh(t)
-        # xstar(t)
-        ## xT(t)' = xbh(t)' for t<=t0
-        ## xT(t)' = xstar(t)' (~0) for t>=t1
-        ## xT(t)' = smoothstep(xbh', xstar', t0, t1) for t0<t<t1
-        ## xT(t) - xT(t0) = integral 
+    _interval_fields = ['srange', 'times', 'steps', 'pbh', 'pstar', 'ptranslate']
 
+    def _load_interval_info(self, S0,S1):
 
-        # construct translation curve
+        cachef = self.bhfname + ".cache.pickle"
 
-        cachef = self.bhfname + ".cache.npz"
+        # there might be a cached file with a time curve etc. in it
 
-        # there might be a cached file with a time curve in it
+        if not os.path.exists(cachef):
+            return False
 
-        if os.path.exists(cachef):
-            cache = numpy.load( cachef )
-            self.ctrange = cache['trange']
-            self.ctimes = cache['times']
-            self.csteps = cache['steps']
-            self.ctrans = cache['translate']
-            return
+        with open(cachef, 'rb') as picklef:
+            cache = pickle.load(picklef)
+
+        if S0 is not None and cache['srange'] != tuple(S0,S1):
+            # Cache exists but spans wrong datastep range
+            return False
+
+        for field in self._interval_fields:
+            # self.srange = cache['srange'] etc.
+            # pbh, pstar, ptranslate are polynomial functions of datastep number
+            setattr(self, field, cache[field])
+    
+        return True
+
+    def _save_interval_info(self):
+        cachef = self.bhfname + ".cache.pickle"
+
+        dd = dict()
+        for field in self._interval_fields:
+            dd[field] = getattr(self, field)
+
+        with open(cachef, 'wb') as picklef:
+            pickle.dump( dd, picklef )
+
+    def _measure_interval(self, S0, S1):
 
         # Calibrate timestep->time mapping.   This involves opening lots of yt datasets.
         yt.set_log_level('warning')
@@ -135,7 +151,7 @@ class BHInfo(object):
                 continue
             allsteps.append( int( m.group(1) ) )
 
-        i0, i1 = numpy.searchsorted( allsteps, [t0, t1] )
+        i0, i1 = numpy.searchsorted( allsteps, [S0, S1] )
         i0 = max( 0, i0-1 )
         i1 = min( len(allsteps)-1, i1+1 )
             
@@ -164,33 +180,64 @@ class BHInfo(object):
             except OSError as e:
                 print("# use_interval(): Not fitting troublesome timestep %d  (time %s) %s: %s" % (sstep, stime, fi, e))
 
+        bhposs = numpy.array(sbhposs)
+        starposs = numpy.array(sstarposs)
+
 
         yt.set_log_level('info')
 
-        sbhposs = numpy.array(sbhposs)
-        sstarposs = numpy.array(sstarposs)
+        self.srange = (S0, S1)
+        self.times = stimes
+        self.steps = steps
 
         myPoly = Chebyshev
-        polydegree = min( len(steps)//3 + 1, len(steps)-1 )
-        pbh = [ myPoly.fit( steps, sbhposs[:,i], deg=polydegree ) for i in range(3) ]
-        pstar = [ myPoly.fit( steps, sstarposs[:,i], deg=polydegree ) for i in range(3) ]
+        polydegree = min( max(3, len(steps)//3 + 1), len(steps)-1 )
+        self.pbh = [ myPoly.fit( steps, bhposs[:,i], deg=polydegree, domain=[S0,S1], window=[-1,1] ) for i in range(3) ]
+        self.pstar = [ myPoly.fit( steps, starposs[:,i], deg=polydegree, domain=[S0,S1], window=[-1,1] ) for i in range(3) ]
 
-        import pickle
-        with open( self.bhfname + '.cache.pickle', 'wb') as picklef:
-            pickle.dump( dict(pbh=pbh, pstar=pstar, sbhposs=sbhposs, sstarposs=sstarposs, steps=steps, stimes=stimes), picklef )
+
+        # solve
+        # T'(s) = lerp( frac(s, S0, S1), TBH'(s), TStar'(s) )
+        # T(S1) = 0
+        # T(s) = T(S1) + integral[S1,s]( T'(s) ) = T(S1) 
+
+        
+        # all the p*'s are functions of datastep-number s
+        psx = Polynomial([-S0/(S1-S0), 1/(S1-S0)], domain=[0,1], window=[0,1]) # linear map S0->0, S1->1, linear in between
+        psxS = psx.convert( kind=myPoly, domain=[S0,S1], window=[-1,1] )  # same linear map, converted to same domain as pbh and pstar
+        plerpS = psxS**2 * (3 - 2*psxS)  # lerp(t,0,1) = 3t^2 - 2t^3 :: plerp(s) : S0->0, S1->1, cubic smoothstep in between
+        ptprimeS = [ plerpS*(self.pbh[i].deriv()) + (1-plerpS)*(self.pstar[i].deriv()) for i in range(3) ]  # rate of change of translation: blending smoothly from pbh' to pstar'
+        self.ptranslate = [ ptprimeS[i].integ(m=1, lbnd=S1) for i in range(3) ]  # ptranslate(s) = definite integral (from S1 to s) of ptprimeS.  Translation is 0 at s=S1.
 
         # check fit
-        print("# Worst fits to pbh:", end="")
-        for i in range(3):
-            aa = numpy.array( [(pbh[i](step) - sbhposs[k,i]) for (k, step) in enumerate(steps)] )
-            imin, imax = numpy.argmin(aa), numpy.argmax(aa)
-            print(" {%g,%g}" % (aa[imin], aa[imax]), end="")
-        print("")
-        
-        # construct translation history
-        translate = numpy.zeros((len(stimes),3))  # XXX stub
+        for ppoly, pname, poss in [ (self.pbh,'pbh',bhposs), (self.pstar,'pstar',starposs) ]:
+            print("# Worst fits to %s:" % pname, end="")
+            for i in range(3):
+                aa = numpy.array( [(ppoly[i](step) - poss[k,i]) for (k, step) in enumerate(steps)] )
+                imin, imax = numpy.argmin(aa), numpy.argmax(aa)
+                print(" {%g,%g}" % (aa[imin], aa[imax]), end="")
+            print("")
 
-        numpy.savez( cachef, trange=numpy.array([t0,t1]), times=stimes, steps=steps, translate=translate )
+
+    def use_interval(self, S0, S1):
+
+        if not self._load_interval_info(S0,S1):
+            self._measure_interval(S0,S1)
+            self._save_interval_info()
+
+    def translation_at(self, step):
+        if self.srange is None:
+            return numpy.zeros(3)
+
+        if step <= self.srange[0]:
+            pass
+
+        elif step >= self.srange[1]:
+            pass
+
+        else:
+            return numpy.array( [ self.ptranslate[i](step) for i in range(3) ] )
+
         
     def bhinfo_at_time(self, time, fromfile=None):
 
