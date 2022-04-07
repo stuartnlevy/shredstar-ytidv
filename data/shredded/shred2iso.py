@@ -243,7 +243,7 @@ class BHInfo(object):
             print("")
 
 
-    def use_interval(self, S0, S1, redo=False, stepspacing=1):
+    def use_interval(self, S0, S1, stepspacing=1, redo=False):
 
         if redo or not self._load_interval_info(S0,S1):
             self._measure_interval(S0,S1,stepspacing=stepspacing)
