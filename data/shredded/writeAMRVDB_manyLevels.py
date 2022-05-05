@@ -107,7 +107,7 @@ for level in range(minLevel, maxLevel+1):
         largestVSize = vSize
 
 
-    outFilePath = "%s/%s_ren_level%d%s.vdb" % (outFileDir, variable, level, framestr)
+    outFilePath = "%s/%s_ren_level%d%s.vdb" % (outFileDir, variable.strip(), level, framestr)  # remove any blanks from variable name: 'c12 ' => 'c12'
 
     if resume and os.path.exists(outFilePath):
         print("Skipping level-%d file %s" % (level, outFilePath), flush=True)
