@@ -149,8 +149,8 @@ for level in range(minLevel, maxLevel+1):
         dataCube.copyFromArray(subGridVarWithGZ, ijk=(ijkout[0],ijkout[1],ijkout[2]))    
     
     # Scale and translate
-    dataMatrix = [[vSize, 0, 0, 0], [0, vSize, 0, 0], [0, 0, vSize, 0], [-vSize/2-largestVSize, -vSize/2-largestVSize, -vSize/2-largestVSize, 1]]
-    maskMatrix = [[vSize, 0, 0, 0], [0, vSize, 0, 0], [0, 0, vSize, 0], [ vSize/2-largestVSize,  vSize/2-largestVSize,  vSize/2-largestVSize, 1]]
+    dataMatrix = [[vSize, 0, 0, 0], [0, vSize, 0, 0], [0, 0, vSize, 0], [-vSize/2, -vSize/2, -vSize/2, 1]]
+    maskMatrix = [[vSize, 0, 0, 0], [0, vSize, 0, 0], [0, 0, vSize, 0], [ vSize/2,  vSize/2,  vSize/2, 1]]
     dataCube.transform = vdb.createLinearTransform(dataMatrix) 
     maskCube.transform = vdb.createLinearTransform(maskMatrix)
 
@@ -162,7 +162,7 @@ for level in range(minLevel, maxLevel+1):
     output.append(dataCube)
 
     
-    vdb.write(outFilePath+'+', grids=output)
+    vdb.write(outFilePath+'+', output, {'translated':'[0, 0, 0]'})
     os.rename(outFilePath+'+', outFilePath)
 
     print("Wrote level-%d file %s in %d ms" % (level, outFilePath, (time.time() - t0)*1000), flush=True)
