@@ -18,7 +18,9 @@ from numpy.polynomial import Chebyshev, Polynomial, Hermite
 ii = 1
 quantdefault = 0.01
 quants = []
+threshes = []
 outstem = "bden"
+fieldvar = "density"
 level = 5
 outgrid = True
 thresh = 3e-11
@@ -26,6 +28,7 @@ smoothed = False
 fixbh = False
 outcurve = None
 doit = True
+repair = False
 
 while ii < len(sys.argv) and sys.argv[ii][0] == '-':
     opt = sys.argv[ii]; ii += 1
@@ -41,8 +44,20 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
                 qstr = ("q" + ss[0]).replace('q0.','q')   # 0.0025 => q0025
             quants.append( ( float(ss[0]), qstr ) )
 
+    elif opt == '-thresh':
+        arg = sys.argv[ii]; ii += 1
+        for s in arg.split(','):
+            ss = s.split('=')
+            if len(ss) > 1:
+                vstr = ss[1]
+            else:
+                vstr = ("v" + ss[0]).replace('v0.','v')   # 0.0025 => v0025
+            threshes.append( [ float(ss[0]), vstr ] )
+
     elif opt == '-s' or opt == '-smoothed':
         smoothed = True
+    elif opt == '-v':
+        fieldvar = sys.argv[ii]; ii += 1
     elif opt == '-level' or opt == '-l':
         level = int( sys.argv[ii] ); ii += 1
     elif opt == '-ogrid':
@@ -55,6 +70,8 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
             fixbh = [float(t) for t in opt.split('=')[1].split(',')]
     elif opt == '-n':
         doit = False
+    elif opt == '-r':
+        repair = True
     else:
         ii = len(sys.argv)
 
@@ -63,6 +80,7 @@ if ii >= len(sys.argv):
 Convert shredded-star gas density to isosurface(s) in .obj form.
  -o outstem  (-o bden) writes to <outstem>.NNNN.vdb
  -l amrgridlevel (-l 5  which yields 256^3 grid)
+ -v fieldvar  (-v density)
  -q quant   (-q 0.01)
  -fixbh     (if given, translate so that black hole is at (0,0,0))
  -fixbh=s0,s1 --- smoothly interpolate from tracking BH to tracking star during datastep range s0 ... s1.
@@ -78,6 +96,8 @@ class BHInfo(object):
 
         self.bhents = None
         self.starents = None
+
+        self.stepmap = None
 
         self.sample_ds = yt.load(datafilename)
 
@@ -273,6 +293,21 @@ class BHInfo(object):
 
         return numpy.array( tr )
 
+    def _build_stepmap(self):
+        if not hasattr(self, 'steps'):
+            raise ValueError("Can't bhinfo_at_step() without calling use_interval() first")
+
+        # fit a line to available step-to-time data
+        self.stepmap = Polynomial.fit( self.steps, self.times, domain=[self.steps[0], self.steps[-1]], window=[0,1], deg=1 )  # 
+        
+
+    def bhinfo_at_step(self, step, fromfile=None):
+        # map from step to time
+        if self.stepmap is None:
+            self._build_stepmap()
+
+        attime = self.stepmap(step)
+        return self.bhinfo_at_time(attime, fromfile)
 
     def bhinfo_at_time(self, time, fromfile=None):
 
@@ -303,12 +338,16 @@ class BHInfo(object):
         dd = dict(time=bhent[1], pos=bhent[2:5], mdot=bhent[15], starpos=starent[2:5])
         return dd
 
+if quants != [] and threshes != []:
+    raise ValueError("Can't specify both -q and -thresh")
 
-if quants == []:
-    quants = [ (quantdefault, "q%g"%quantdefault) ]
+if quants == [] and threshes == []:
+    raise ValueError("Must specify one of -q and -thresh")
+    #quants = [ (quantdefault, "q%g"%quantdefault) ]
 
 
-def grid2iso(grid, outobjname, field='density', left_edge=[0,0,0], right_edge=[1,1,1], vmin=1e-12, translate=numpy.array([0,0,0])):
+
+def grid2iso(grid, outobjname, field=fieldvar, left_edge=[0,0,0], right_edge=[1,1,1], vmin=1e-12, translate=numpy.array([0,0,0])):
     sz, sy, sx = grid.shape
 
     dbox = numpy.array(right_edge) - numpy.array(left_edge)
@@ -354,9 +393,15 @@ def process_star(fname):
     framestr = m.group(1)
     step = int(framestr)
 
+    if repair:
+        whats = (quants if quants else threshes)
+        haveall = all( [ os.path.exists( '%s%s_%d.%s.obj' % (outstem, wstr, level, framestr) ) for (wval,wstr) in whats ] )
+        if haveall:
+            return
+
     bhi = BHInfo(fname)
 
-    if isinstance(fixbh, (list,tuple,numpy.array)):
+    if isinstance(fixbh, (list,tuple,numpy.ndarray)):
         bhi.use_interval( fixbh[0], fixbh[1] )
 
     ds = yt.load( fname )
@@ -374,25 +419,32 @@ def process_star(fname):
 
     if doit:
         if smoothed:
-            brick = ds.smoothed_covering_grid(level=level, left_edge=ds.domain_left_edge, dims=dims, fields=['density'], num_ghost_zones=1)
+            brick = ds.smoothed_covering_grid(level=level, left_edge=ds.domain_left_edge, dims=dims, fields=[fieldvar], num_ghost_zones=1)
         else:
-            brick = ds.covering_grid(level=level, left_edge=ds.domain_left_edge, dims=dims, fields=['density'], num_ghost_zones=0)
+            brick = ds.covering_grid(level=level, left_edge=ds.domain_left_edge, dims=dims, fields=[fieldvar], num_ghost_zones=0)
 
-        bden = brick['density']
+        bden = brick[fieldvar]
         # btem = brick[('gas','temperature')]
 
-        vthreshes = numpy.quantile( bden, 1.0-numpy.array([val for (val,qstr) in quants]) )
+        if quants != []:
+            vthreshes = numpy.quantile( bden, 1.0-numpy.array([val for (val,qstr) in quants]) )
+        else:
+            vthreshes = [val for (val,vstr) in threshes]
         vmax = bden.max()
     else:
         # dummies
-        vthreshes = [ 1-float(qstr[1:]) for (val,qstr) in quants ]
+        if quants != []:
+            vthreshes = [ 1-float(qstr[1:]) for (val,qstr) in quants ]
+        else:
+            vthreshes = threshes
         vmax = 1
         bden = None
 
-    for ((quant, qstr), vthresh) in zip(quants, vthreshes):
-        outname = '%s%s_%d.%s.obj' % (outstem, qstr, level, framestr)
+    whats = (quants if quants else threshes)
+    for ((wval, wstr), vthresh) in zip(whats, vthreshes):
+        outname = '%s%s_%d.%s.obj' % (outstem, wstr, level, framestr)
      
-        print("vmax %g, vthresh %s => %g, for %s %s" % (vmax, qstr, vthresh, outstem, framestr))
+        print("vmax %g, vthresh %s => %g, for %s %s" % (vmax, wstr, vthresh, outstem, framestr))
 
         if fixbh:
             if bh is None:
@@ -404,7 +456,7 @@ def process_star(fname):
                 return "%g %g %g" % tuple(v)
             print(f"# frame {framestr} translate {ggg(translate)} was {ggg(old_translate)}")
         else:
-            new_translate = numpy.array([0,0,0])
+            translate = numpy.array([0,0,0])
 
         if doit:
             grid2iso( bden, outname, vmin=vthresh, translate=translate )
