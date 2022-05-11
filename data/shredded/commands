@@ -1,0 +1,155 @@
+nohup sh -xc 'for f in m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_??00; do echo /gd/home/src/anaconda3/bin/python3 shred2pb.py -q 0.025 -l 5 -o pb/m1plt50 $f; done| /usr/bin/time pardo -j6' > pb/m1plt50.log 2>&1
+
+nohup sh -xc 'for f in 1e3_m1.0_p16_b10_300k_fr1em5_rw4rp_sr5_fend/multitidal_hdf5_plt_cnt_??00; do echo /gd/home/src/anaconda3/bin/python3 shred2pb.py -q 0.025 -l 5 -o pb/m1p16b10fend $f; done| /usr/bin/time pardo -j6' > pb/m1p16b10fend.log 2>&1
+
+for f in m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_*00; do
+    echo ./shred2grid.py -o vdb/m1b2plt50q05 -q 0.05 -l 7 $f
+done | /usr/bin/time pardo -j3 >& /tmp/ouch2&
+
+for f in  m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_??00; do
+  echo ./shred2iso.py -q 0.002 -s -l 6 -o vdb/m1b2plt50sq002 $f
+done
+
+for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 250-350`; do echo ./shred2iso.py -q 0.01,0.002 -s -l 6 -o vdb/m1b2plt50 $f; echo ./shred2iso.py -q 0.0004,0.00005 -s -l 7 -o vdb/m1b2plt50 $f; done|/usr/bin/time pardo -j7 >& log/plt50.250-350.log&
+
+for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 250-350%10` `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 400-2900%100` ; do echo /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v dens -o amrvdb; done
+
+for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 250-350%10` `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 100-2900%100`; do
+    echo ./shred2iso.py -fixbh -q 0.01,0.002 -s -l 6 -o isobh/m1b2plt50 $f;
+    echo ./shred2iso.py -fixbh -q 0.0004,0.00005 -s -l 7 -o isobh/m1b2plt50 $f
+done | \
+  /usr/bin/time pardo -j7 > log/plt50.isobh.log 2>&1 &
+
+for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 120-240%10` `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d 360-450%10`; do
+    echo ./shred2iso.py -fixbh -q 0.01,0.002 -s -l 6 -o isobh/m1b2plt50 $f;
+    echo ./shred2iso.py -fixbh -q 0.0004,0.00005 -s -l 7 -o isobh/m1b2plt50 $f
+done | \
+  /usr/bin/time pardo -j7 -i > log/plt50.isobh.log2 2>&1 &
+
+for rr in 100-1290%10 1300-2900%100; do
+  for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo ./shred2iso.py -fixbh=150,330,10 -q 0.01,0.002 -s -l 6 -o isobhz/m1b2plt50 $f;
+    echo ./shred2iso.py -fixbh=150,330,10 -q 0.0004,0.00005 -s -l 7 -o isobhz/m1b2plt50 $f
+  done;
+done | \
+  /usr/bin/time pardo -j2 -i > log/plt50.isobh.log3 2>&1 &
+
+for f in `iota -nf 1e3_m1.0_p16_b10_300k_fr1em5_rw4rp_sr5_fend/multitidal_hdf5_plt_cnt_%04d 0-4200%100`; do
+    echo ./shred2iso.py -fixbh -q 0.01,0.002 -s -l 6 -o isobh/m1b10fend $f;
+    echo ./shred2iso.py -fixbh -q 0.0004,0.00005 -s -l 7 -o isobh/m1b10fend $f
+done | \
+  /usr/bin/time pardo -j7 -i > log/fend.isobh.log 2>&1 &
+
+for rr in 100-1290%10 1300-2900%100; do
+  for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo ./shred2iso.py -fixbh=280,460,10 -q 0.01,0.002 -s -l 6 -o isobhz/m1b2plt50 $f;
+    echo ./shred2iso.py -fixbh=280,460,10 -q 0.0004,0.00005 -s -l 7 -o isobhz/m1b2plt50 $f
+  done;
+done | \
+  /usr/bin/time pardo -j7 -i > log/plt50.isobhz.log2 2>&1 &
+
+for rr in 120-1290%10 1300-2900%100; do
+  iota -nf 'shred2pb.py -q 0.02 -l 6 -o pb/m1plt50mult -field "dens,c12 ,n14 " m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d' $rr
+done | /usr/bin/time pardo -j8 -i > log/plt50mult.pb.log 2>&1
+
+for rr in 100-2900%100 120-1290%20; do
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -o amrvdb"
+    done
+done | shacross -hosts vis8-11 -ppn 10 > log/amrvdb-c12.log2 2>&1
+
+for rr in 100-2900%100 120-1290%20; do
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -o amrvdb"
+    done
+done | shacross -hosts vis7-11 -ppn 10 > log/amrvdb-dens.log3 2>&1
+
+for rr in 100-1290%10 1300-2900%100; do
+  for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo ./shred2iso.py -q 0.01,0.002 -s -l 6 -o isobh/m1b2plt50 $f;
+    echo ./shred2iso.py -q 0.0004,0.00005 -s -l 7 -o isobh/m1b2plt50 $f
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/plt50.isobh.log3 2>&1
+
+for rr in 100-1300%10; do
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb"
+    done
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -l 13 -o amrvdb"
+    done
+done | shacross -hosts vis0-5 -ppn 11 > log/amrvdb-dens+c.log3 2>&1
+
+
+for s in isobh/m1b2plt50q0{1_6,02_6,004_7,0005_7}; do
+    iota -nf "`which gconvert` $s.%04d.obj $s.%04d.bgeo" 100-1300%10
+done
+
+for rr in 1310-2000%10; do
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb"
+    done
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -l 13 -o amrvdb"
+    done
+done | shacross -hosts vis0-3 -ppn 11 > log/amrvdb-dens+c.log4 2>&1
+
+for rr in 855-900; do
+    for f in `iota -nf m1.0_p16_b2.0_300k_plt50/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb"
+    done
+done | shacross -hosts vis0-5 -ppn 13 > log/amrvdb-dens.log5 2>&1
+
+for rr in 0-4600%100; do
+    for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'he4 ' -l 13 -o amrvdb5_300"
+    done
+done | shacross -hosts vis0-5 -ppn 15 > log/amrvdb5-dens.log 2>&1
+
+for rr in 0-4700%100; do
+  for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo "./shred2iso.py -v 'c12 ' -thresh 0.001,0.003 -s -l 6 -o isobhb5_300/b5_300 $f;
+    echo "./shred2iso.py -v 'c12 ' -thresh 0.0003 -s -l 7 -o isobhb5_300/b5_300 $f
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobh.log 2>&1
+
+for rr in 0-4700%100; do
+  for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo "./shred2iso.py -v 'dens' -q 0.01,0.002 -s -l 6 -o isobhb5_300/b5_300 $f;
+    echo "./shred2iso.py -v 'dens' -q 0.0004,0.00005 -s -l 7 -o isobhb5_300/b5_300 $f
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobhd.log 2>&1
+
+for rr in 0-4700%20; do
+    for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'he4 ' -l 13 -o amrvdb5_300"
+    done
+done | shacross -hosts vis7-11 -ppn 15 > log/amrvdb5-dense20.log 2>&1
+
+for rr in 10-4700%20; do
+    for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'c12 ' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'he4 ' -l 13 -o amrvdb5_300"
+    done
+done | shacross -hosts vis7-11 -ppn 15 > log/amrvdb5-dense10.log 2>&1
+
+for rr in 0-4700%100; do
+    for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'h1  ' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'n14 ' -l 13 -o amrvdb5_300"
+    done
+done | shacross -hosts vis7-11 -ppn 10 > log/amrvdb5-hn100.log 2>&1
+
+for rr in 0-4700%10; do
+  for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo "./shred2iso.py -v 'dens' -q 0.01,0.002 -r -s -l 6 -o isobhb5_300/b5_300 $f;
+    #echo "./shred2iso.py -v 'dens' -q 0.0004,0.00005 -s -l 7 -o isobhb5_300/b5_300 $f
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobhde10.log 2>&1
+
+bhinfo.py -fitrange 498-800 -bhpath b5.bhpath.wf -trackpath b5.trackpath.wf -outrange 0-4700 1e3_m1.0_p16_b5.0_300k  > b5.bhtable.dat
