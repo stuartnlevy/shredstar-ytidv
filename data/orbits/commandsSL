@@ -1,0 +1,26 @@
+# Construct orbit curves for the well-measured stars.  -S 0%3 ensures that we can make Bezier curves out of them.
+
+/i0/src/ghez/ghez2geo -o justorbits_2-14.ggeo -S 0%3 -s /i0/src/ghez/3D_orbits_movie_20200107b.dat
+
+/i0/src/ghez/ghezgeo2bgeo.py -i justorbits_2-14.ggeo -open -o justorbits_2-14.bgeo
+
+
+# Generate 1601 frames of the well-known-orbit stars -- 400 years at 1/4-year intervals.
+##  It *doesn't* include the 10,000 near-neighborhood stars on statistically-generated orbits.   We could make those too, but it's a lot of data (~2GB).
+##  Add -e orbital_elements_earlyType.dat -l orbital_elements_lateType.dat to make them.
+
+/i0/src/ghez/ghez2geo -o juststars1601.ggeo -D 1890-2390%.25 -s /i0/src/ghez/3D_orbits_movie_20200107b.dat 
+
+/i0/src/ghez/ghezgeo2bgeo.py -i juststars1601.ggeo -o juststars1601.bgeo 
+
+/i0/src/ghez/ghez2geo -o justorbits_5-20.ggeo -S 0%3 -n 1500,400 -s /i0/src/ghez/3D_orbits_movie_20220520.dat
+/i0/src/ghez/ghezgeo2bgeo.py -i justorbits_5-20.ggeo -open -o justorbits_5-20.bgeo
+
+/i0/src/ghez/ghez2geo -o justorbits_5-20.ggeo -S 0%3 -n 1500,400 -s /i0/src/ghez/3D_orbits_movie_20220520.dat
+/i0/src/ghez/ghezgeo2bgeo.py -i justorbits_5-20.ggeo -open -o justorbits_5-20.bgeo
+
+/i0/src/ghez/ghez2geo -x S2-36 -o juststars_5-23.ggeo -D 1890-2390%.25 -d 0.125 -s /i0/src/ghez/3D_orbits_movie_20220520.dat 
+/i0/src/ghez/ghezgeo2bgeo.py -i juststars_5-23.ggeo -o juststars_5-23.bgeo 
+
+/i0/src/ghez/ghez2geo -x S2-36 -o justorbits_5-23.ggeo -S 0%3 -n 1500,400 -s /i0/src/ghez/3D_orbits_movie_20220520.dat
+/i0/src/ghez/ghezgeo2bgeo.py -i justorbits_5-23.ggeo -open -o justorbits_5-23.bgeo
