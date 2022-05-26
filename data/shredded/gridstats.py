@@ -11,6 +11,8 @@ gridname = 'density'
 outstem = None
 quantiles = [1, .999, .9, .5, 0]
 vrange = None
+dolog = True
+addlevels = []
 
 ii = 1
 while ii < len(sys.argv) and sys.argv[ii][0] == '-':
@@ -21,6 +23,12 @@ while ii < len(sys.argv) and sys.argv[ii][0] == '-':
         quantiles = [ float(s) for s in sys.argv[ii].replace(',',' ').split() ]
     elif opt == '-vrange':
         vrange = [float(s) for s in sys.argv[ii].replace(',',' ').split()]; ii += 1
+    elif opt == '-log':
+        dolog = True
+    elif opt == '-linear':
+        dolog = False
+    elif opt == '-addlevels':
+        addlevels = [int(s) for s in sys.argv[ii].replace(',',' ').split()]; ii += 1
 
 if ii >= len(sys.argv):
     print("""Usage: %s [-q quantiles] [-o outstem] amrvdb5/*level9.??00.vdb
@@ -33,14 +41,15 @@ stuff = []
 fmt = "  ".join( ["%11.7g"] * len(quantiles) ) + " # %s"
 
 framepat = re.compile('\.(\d\d\d\d)\.vdb')
+levelpat = re.compile('level\d+')
 
-for vdbf in sys.argv[ii:]:
+def get_nonempty_voxels(vdbf):
     gg, meta = pyopenvdb.readAll(vdbf)
 
     ggrid = [g for g in gg if g.name == gridname]
     if len(ggrid) != 1:
         print("Can't find unique '%s' grid in %s" % (gridname, vdbf))
-        continue
+        return None
 
     g = ggrid[0]
     
@@ -50,13 +59,26 @@ for vdbf in sys.argv[ii:]:
 
     if any(agbox[0] > agbox[1]):
         print("# Skipping empty grid from ", vdbf)
-        continue
+        return None
 
     arr = numpy.empty( (agbox[1] - agbox[0]) + 1 )
     g.copyToArray( arr, ijk=gbox[0] )
 
     akeep = arr[arr != 0]
-    aquant = numpy.quantile( akeep, quantiles )
+    return akeep
+
+for vdbf in sys.argv[ii:]:
+    gotvox = [ get_nonempty_voxels( vdbf ) ]
+    for level in addlevels:
+        addvdbf = levelpat.sub('level%d' % level, vdbf)
+        gotvox.append( get_nonempty_voxels( addvdbf ) )
+    gotvox = [ vox for vox in gotvox if vox is not None and len(vox) > 0 ]
+    if gotvox == []:
+        continue
+
+    voxels = numpy.concatenate( gotvox )
+
+    aquant = numpy.quantile( voxels, quantiles )
     print(fmt % (*aquant, vdbf))
 
     m = framepat.search(vdbf)
@@ -68,7 +90,12 @@ for vdbf in sys.argv[ii:]:
 
     stuff.append( ( frame, aquant, vdbf ) )
 
+
 if outstem:
+    if len(stuff) == 0:
+        print("No data to plot.")
+        sys.exit(1)
+
     with open(outstem+'.dat', 'w') as datf:
         for frame, aquant, vdbf in stuff:
             print(frame, fmt % (*aquant, vdbf), file=datf)
@@ -77,7 +104,8 @@ if outstem:
         filetail = os.path.basename( stuff[0][2] )
         varname = filetail.split('_')[0]  # dens_ren_levelN.####.vdb => dens
         print('set title "quantiles of %s"' % varname, file=pltf)
-        print('set logscale y', file=pltf)
+        if dolog:
+            print('set logscale y', file=pltf)
         print('set style data linespoints', file=pltf)
         print('set terminal png size 960,720', file=pltf)
         print('set output "%s.png"' % outstem, file=pltf)
