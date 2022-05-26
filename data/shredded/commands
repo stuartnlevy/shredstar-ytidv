@@ -152,4 +152,50 @@ for rr in 0-4700%10; do
   done;
 done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobhde10.log 2>&1
 
-bhinfo.py -fitrange 498-800 -bhpath b5.bhpath.wf -trackpath b5.trackpath.wf -outrange 0-4700 1e3_m1.0_p16_b5.0_300k  > b5.bhtable.dat
+for rr in 0-4700%10; do
+  for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    #echo "./shred2iso.py -v 'dens' -q 0.01,0.002 -r -s -l 6 -o isobhb5_300/b5_300 $f;
+    echo "./shred2iso.py -v 'dens' -q 0.0004,0.00005 -s -l 7 -o isobhb5_300/b5_300 $f"
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobhe10.log 2>&1
+
+bhinfo.py -fitrange 280-460 -origin 0,0,0 -starpath b2.starpath.wf -bhpath b2.bhpath.wf -trackpath b2.trackpath.wf -invtrackpath b2.invtrackpath.wf -outrange 0-2900 m1.0_p16_b2.0_300k_plt50 > b2.bhtable.dat # for non-catastrophic sim
+
+
+bhinfo.py -clampbeforestep 498 -fitrange 498-800 -origin 0,0,0 -starpath b5.starpath.wf -bhpath b5.bhpath.wf -trackpath b5.trackpath.wf -invtrackpath b5.invtrackpath.wf -outrange 0-4700 1e3_m1.0_p16_b5.0_300k  > b5.bhtable.dat
+
+for rr in 0-4700%10; do
+  for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+    echo "./shred2iso.py -v 'c12 ' -thresh 0.001 -r -s -l 6 -o isobhb5_300/b5_300 $f"
+  done;
+done | shacross -hosts vis7-11 -ppn 5  > log/b5_300.isobhc12.log 2>&1
+
+for rr in 490-4700%10; do
+    for f in `iota -nf 1e3_m1.0_p16_b5.0_300k/multitidal_hdf5_plt_cnt_%04d $rr`; do
+       #echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'dens' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'n14 ' -l 13 -o amrvdb5_300"
+       echo "/usr/bin/time -v /gd/home/src/anaconda3/envs/py38/bin/python3 writeAMRVDB_manyLevels.py -r -i $f -v 'h1  ' -l 13 -o amrvdb5_300"
+    done
+done | shacross -hosts vis7-11 -ppn 15 > log/amrvdb5-nh10.log 2>&1
+
+/usr/bin/time gridstats.py -log -vrange 1e-10,1 -addlevels 2,4,7 -o stats/stats.dens amrvdb5_300/dens_ren_level9.??00.vdb >& stats/stats.dens.log
+for e in h1 he4 c12 n14; do echo "/usr/bin/time gridstats.py -linear -addlevels 2,4,7 -o stats/stats.$e amrvdb5_300/${e}_ren_level9.??00.vdb > stats/$e.log 2>&1"; done|/usr/bin/time shacross -hosts vis7-10
+
+
+# Convert isosurfaces into .pb's
+for q in 00005_7 0004_7 002_6 ; do for i in 0 1 2 3 4 5 6 7 8 9; do echo iso2pb.py -o isobhb5_300/pb isobhb5_300/b5_300q$q.??${i}0.obj; done; done|/usr/bin/time shacross -ppn 5 -hosts vis7-11
+
+# mkspeck_b5.sh
+awk 'BEGIN { s[0]="00005_7";s[1]="0004_7";s[2]="002_6"; o=0; for(i=400; i <= 4700; i += 10) { for(k=0;k<3;k++) { printf("pb -t %d isobhb5_300/pb/b5_300q%s.%04d.pb\n", o, s[k], i); } o++; } }' > speckb5.speck
+
+
+bhwf2vd.py -clampbefore 500 -every 10 b5.trackpath.wf  # => b5.trackpath.vd
+bhwf2vd.py -clampbefore 500 -every 10 b5.invtrackpath.wf  # => b5.invtrackpath.vd
+
+# 
+## time scale:
+## one frame per datastep, 30 frames/sec, first frame = time 0.0
+
+# Generate .speck reference to isos, and tracks for blackhole and star.   datastep 0000 = time 0.0
+bhtable2specks.py -i b5.bhtable.dat -isoroot isobhb5_300/pb/b5_300 -isos q00005_7,q0004_7,q002_6 -cstar 24 -cbh 5 -clampbefore 498 -o isobhb5_300/markers 0-4700%10
+
