@@ -28,6 +28,7 @@ smoothed = False
 fixbh = False
 outcurve = None
 doit = True
+do_bgeo = True
 repair = False
 
 while ii < len(sys.argv) and sys.argv[ii][0] == '-':
@@ -369,6 +370,9 @@ def grid2iso(grid, outobjname, field=fieldvar, left_edge=[0,0,0], right_edge=[1,
             outf.write(b'v %.9g %.9g %.9g\n' % tuple(translate+v))
         for f in faces:
             outf.write(b'f %d %d %d\n' % tuple(f+1))
+    if do_bgeo:
+        os.system("/share/apps/houdini/hfs19.0.589/bin/gconvert %s %s" % (outobjname, outobjname[:-4] + ".bgeo"))
+
     dt = time.time() - t0
     print(f"Wrote {len(faces)} triangles cells to {outobjname} with {field} >= {vmin:g} in {int(dt*1000)} ms")
 
