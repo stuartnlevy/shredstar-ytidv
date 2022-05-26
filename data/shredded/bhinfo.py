@@ -275,7 +275,7 @@ class BHInfo(object):
 if __name__ == '__main__':
 
     def Usage():
-        print("""Usage: %s [-bhpath outfile.wf] [-trackpath outtrack.wf] [-trackrange fromstep-tostep] simdir [fromstep-tostep] > motions.dat
+        print("""Usage: %s [-bhpath outfile.wf] [-trackpath outtrack.wf] [-invtrackpath outinvtrack.wf] [-trackrange fromstep-tostep] simdir [fromstep-tostep] > motions.dat
 
 """ % sys.argv[0])
         sys.exit(1)
@@ -285,9 +285,13 @@ if __name__ == '__main__':
         return ffrom, fto
 
     bhpath = None
+    starpath = None
     trackpath = None
+    invtrackpath = None
+    clampbeforestep = None
     outrange = (None, None)
     fitrange = (None, None)
+    origin = numpy.array( [0, 0, 0] )
 
     ii = 1
 
@@ -297,10 +301,21 @@ if __name__ == '__main__':
             bhpath = sys.argv[ii]; ii += 1
         elif opt == '-trackpath':
             trackpath = sys.argv[ii]; ii += 1
+        elif opt == '-invtrackpath':
+            invtrackpath = sys.argv[ii]; ii += 1
+        elif opt == '-starpath':
+            starpath = sys.argv[ii]; ii += 1
         elif opt == '-outrange':
             outrange = frange_from( sys.argv[ii] ); ii += 1
         elif opt == '-fitrange':
             fitrange = frange_from( sys.argv[ii] ); ii += 1
+        elif opt == '-clampbefore':
+            clampbeforestep = int( sys.argv[ii] ); ii += 1
+        elif opt == '-origin':
+            ss = sys.argv[ii].replace(',', ' ').split(); ii += 1
+            if len(ss) != 3:
+                raise ValueError("-origin: expected X,Y,Z -- what's " + sys.argv[ii-1] + " ?")
+            origin = numpy.array( [ float(s) for s in ss ] )
         else:
             if opt != '-h':
                 print("Unknown option: ", opt)
@@ -315,13 +330,20 @@ if __name__ == '__main__':
 
     bhi.use_interval( *fitrange )
 
+    def my_bhinfo_at_step(step):
+        mystep = step
+        if clampbeforestep is not None and step < clampbeforestep:
+            mystep = clampbeforestep
+
+        return bhi.bhinfo_at_step( mystep )
+
     startstep, endstep = bhi.steps[0], bhi.steps[-1]
     if outrange[0] is not None:
         startstep, endstep = min(startstep, outrange[0]), max(endstep, outrange[1])
 
     print("#step   distance     bhX          bhY             bhZ       starX           starY       starZ        mdot   time # %s %s" % (simdir, bhi.srange))
     for step in range(startstep, endstep+1):
-        bhit = bhi.bhinfo_at_step(step)
+        bhit = my_bhinfo_at_step(step)
         bhpos = bhi.mapped( bhit['pos'] )
         starpos = bhi.mapped( bhit['starpos'] )
         bsdist = numpy.sqrt( numpy.sum( numpy.square(bhpos-starpos) ) )
@@ -330,12 +352,25 @@ if __name__ == '__main__':
     if bhpath:
         with open(bhpath, 'w') as bhpf:
             for step in range(startstep, endstep+1):
-                bhit = bhi.bhinfo_at_step(step)
+                bhit = my_bhinfo_at_step(step)
                 bhpos = bhi.mapped( bhit['pos'] )
-                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d" % (*bhpos, step, *bhi.srange), file=bhpf)
+                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d BH position" % (*bhpos, step, *bhi.srange), file=bhpf)
 
     if trackpath:
         with open(trackpath, 'w') as trackf:
             for step in range(startstep, endstep+1):
-                transla = bhi.mapped( bhi.translation_at( step ) )
-                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d" % (*transla, step, *bhi.srange), file=trackf)
+                transla = ( bhi.mapped( bhi.translation_at( step ) ) + origin )
+                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d +translation" % (*transla, step, *bhi.srange), file=trackf)
+
+    if invtrackpath:
+        with open(invtrackpath, 'w') as trackf:
+            for step in range(startstep, endstep+1):
+                transla = - ( bhi.mapped( bhi.translation_at( step ) ) + origin )
+                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d -translation" % (*transla, step, *bhi.srange), file=trackf)
+
+    if starpath:
+        with open(starpath, 'w') as starpf:
+            for step in range(startstep, endstep+1):
+                bhit = my_bhinfo_at_step(step)
+                starpos = bhi.mapped( bhit['starpos'] )
+                print("%11.8g %11.8g %11.8g 0 0 0 60 # %d of %d..%d -translation" % (*starpos, step, *bhi.srange), file=starpf)
