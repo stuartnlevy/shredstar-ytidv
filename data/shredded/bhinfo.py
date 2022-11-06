@@ -268,7 +268,7 @@ class BHInfo(object):
         if tick != int(tick) and tick < nents-1:
             bhent = bhent + (tick - int(tick))*(self.bhents[ii+1] - bhent)  # bhent + ... rather than += ... -- be sure not to alter bhents[] array.
             starent = starent + (tick - int(tick))*(self.starents[ii+1] - starent)
-        dd = dict(time=bhent[1], pos=bhent[2:5], mdot=bhent[15], starpos=starent[2:5])
+        dd = dict(time=bhent[1], pos=bhent[2:5], vel=bhent[5:8], acc=bhent[8:11], mdot=bhent[15], starpos=starent[2:5], starvel=starent[5:8], staracc=starent[8:11])
         return dd
 
 
@@ -341,13 +341,16 @@ if __name__ == '__main__':
     if outrange[0] is not None:
         startstep, endstep = min(startstep, outrange[0]), max(endstep, outrange[1])
 
-    print("#step   distance     bhX          bhY             bhZ       starX           starY       starZ        mdot   time # %s %s" % (simdir, bhi.srange))
+    print("#step   distance     bhX          bhY             bhZ       starX           starY       starZ        relspeed time  bhvelX  bhvelY  bhvelZ  starvelX starvelY starvelZ # %s %s" % (simdir, bhi.srange))
     for step in range(startstep, endstep+1):
         bhit = my_bhinfo_at_step(step)
         bhpos = bhi.mapped( bhit['pos'] )
         starpos = bhi.mapped( bhit['starpos'] )
+        bhvel = bhi.mapped( bhit['vel'] )
+        starvel = bhi.mapped( bhit['starvel'] )
         bsdist = numpy.sqrt( numpy.sum( numpy.square(bhpos-starpos) ) )
-        print("%4d  %11.7g  %11.8g %11.8g %11.8g   %11.8g %11.8g %11.8g  %11.7g  %g" % (step, bsdist, *bhpos, *starpos, bhit['mdot'], bhit['time']))
+        bsspeed = numpy.sqrt( numpy.sum( numpy.square(bhvel-starvel) ) )
+        print("%4d  %11.7g  %11.8g %11.8g %11.8g   %11.8g %11.8g %11.8g  %11.7g  %g  %g %g %g  %g %g %g" % (step, bsdist, *bhpos, *starpos, bsspeed, *bhvel, *starvel, bhit['time']))
 
     if bhpath:
         with open(bhpath, 'w') as bhpf:
