@@ -22,25 +22,33 @@ class BHInfo(object):
 
         self.stepmap = None
 
+        self.bhfname = None
+
+        if datafilename.endswith('.dat'):
+            self.bhfname = datafilename
+            datafilename = os.path.dirname( datafilename )
+
         if os.path.isdir(datafilename):
             # if they just give a directory, choose the first suitable file
             for fi in glob.iglob( os.path.join( datafilename, 'multitidal_hdf5_plt_cnt_????' ) ):
                 datafilename = fi
                 break
 
+        if self.bhfname is None:
+            self.bhfname = os.path.join( os.path.dirname( datafilename ), "sinks_evol.dat" )
+
         self.sample_ds = yt.load(datafilename)
 
-        self.inhale(datafilename)  # read position data 
+        self.inhale(self.bhfname)  # read position data 
 
 
-    def inhale(self, datafilename):
+    def inhale(self, sinksevolfile):
 
         # Given one data file's name, find the Black Hole etc. tracking info in the same directory.
-        self.bhfname = os.path.join( os.path.dirname(datafilename), "sinks_evol.dat" )
-        if not os.path.exists(self.bhfname):
-            raise OSError("BHInfo(): Can't find BH info file %s" % self.bhfname)
+        if not os.path.exists(sinksevolfile):
+            raise OSError("BHInfo(): Can't find BH info file %s" % sinksevolfile)
 
-        with open(self.bhfname, 'rb') as inf:
+        with open(sinksevolfile, 'rb') as inf:
             # [00]part_tag         [01]time         [02]posx         [03]posy         [04]posz         [05]velx         [06]vely         [07]velz       [08]accelx       [09]accely       [10]accelz        [11]anglx        [12]angly        [13]anglz         [14]mass         [15]mdot        [16]ptime
             bhents = []
             starents = []
@@ -56,9 +64,153 @@ class BHInfo(object):
         self.bhents = numpy.array(bhents)
         self.starents = numpy.array(starents)
 
+    def extend_orbit_back(self, timefrom, timeto, nthrun=0, needtimes=None):
+        """Fit a parabola to the (bh-star) positions over physical-time interval [timefrom, timeto].
+           Overwrites the positions in self.bhents and self.starents before time=timefrom, with one entry for each time in needtimes[]."""
+
+        # Let's say we don't need to find the plane.  We know it's in the XY plane, and with periapsis in the +Y direction.
+        # Need to estimate angular momentum (equal area rule) to compute times along the curve.
+        times = self.bhents[:,1]
+
+        # selfcheck
+        if any( times != self.starents[:,1] ):
+            print("*** TROUBLE in sinks_evol: not all star times match BH times ***")
+
+
+        chosen = (times >= timefrom) & (times <= timeto)  # subset
+
+        iruns = numpy.where( times[1:] < times[:-1] )   
+        runtrange = [times[0], times[-1]]
+        if len(iruns) > 0 and len(iruns[0]) > 0:
+            breaks = [0] + [k+1 for k in iruns[0]] + [len(times)]
+            print("extend_orbit_back: sinks_evol contains multiple time runs:")
+            for i in range(len(breaks)-1):
+                trange = (times[breaks[i]], times[breaks[i+1]-1])
+                if i == nthrun:
+                    runtrange = trange
+                print("%2d: [%4d:%4d] %g - %g" % (i, breaks[i],breaks[i+1], *trange))
+            print("Using run %d (-nthrun N to change that)" % nthrun)
+            chosen[0:breaks[nthrun]] = False
+            if nthrun+1 < len(breaks):
+                chosen[breaks[nthrun+1]:] = False
+
+        if numpy.count_nonzero( chosen ) < 3:
+            print("extend_orbit_back: fewer than 3 measurements in run %d's time range [%g .. %g] (have %d in range %g .. %g).  Can't fit a parabola." % (nthrun, timefrom, timeto, len(times), runtrange[0], runtrange[1]))
+            return
+
+        bsvec = self.bhents[:,2:5] - self.starents[:,2:5]
+        ctimes = times[chosen]
+        cbsvec = bsvec[chosen]
+
+        # fit a parabola in Y.  Use the X coord, not time, as the independent variable.
+        bsparabolay = Polynomial.fit( cbsvec[:,0], cbsvec[:,1], deg=2, domain=(cbsvec[0,0], cbsvec[-1,0]), window=[-1,1] )
+        xbackward = cbsvec[0,0] - cbsvec[1,0] # positive (or negative) according to whether X increases (decreases) toward the extrapolated region
+
+        y0 = bsparabolay(0)
+        a = y0 - bsparabolay(1)
+
+        # fit a line to the time curve assuming Kepler's equal-area law
+        # indefinite integral of area with respect to x: r_vector dot perp(r'_vector) = (x,y) dot (-2ax^2, (y0 - ax^2)) = 
+        # dA/dx = |(1,y',0) cross (x,y,0)| = |(0, 0, 1*y - y'*x)| = (y0-ax^2) - (-2ax^2) = y0 + ax^2
+        # integral dA/dx = y0*x + 1/3 ax^3
+        nomAs = bsvec[:,0] * (y0 + (1/3.0)*a*numpy.square(bsvec[:,0]))
+
+        # debug: do direct estimate of area too
+        # adopt a zero-point timestep for area
+        xzeroes = numpy.where( bsvec[1:,0] * bsvec[:-1,0] < 0 )
+        inear0 = xzeroes[0][0] if (len(xzeroes) > 0 and len(xzeroes[0]) > 0) else 0
+        realdrvecs = bsvec[1:] - bsvec[:-1]
+        realdAs = []
+        for rvec, drvec in zip(bsvec[:-1], realdrvecs):
+            cx = numpy.cross( rvec, drvec )
+            dA = numpy.sqrt( numpy.square(cx).sum() )
+            realdAs.append( dA )
+        realdAs.append( dA )
+        realA0 = numpy.sum( realdAs[:inear0] )
+        realAs = numpy.cumsum( realdAs ) - realA0
+        
+        
+        cnomAs = nomAs[chosen]
+        crealAs = realAs[chosen]
+        #time_A_fit = Polynomial.fit( cnomAs, ctimes, deg=1, domain=(cnomAs[0], cnomAs[-1]), window=[-1,1] )
+        time_A_fit = Polynomial.fit( crealAs, ctimes, deg=1, domain=(crealAs[0], crealAs[-1]), window=[-1,1] )
+
+        dts = times[1:] - times[:-1]
+        # how good are the fits?
+        with open('/tmp/extend.dat','w') as extf:
+            print('#chosen x y t nomA y_yfit t_tfit yfit tfit realA realA_nomA bhx bhy starx stary dt realdA', file=extf)
+            for cho, t, bsv, nomA, realA, bhpos, starpos, dt, realdA in zip(chosen, times, bsvec, nomAs, realAs, self.bhents[:,2:5], self.starents[:,2:5], dts, realdAs):
+                x, y = bsv[0:2]
+                yfit = bsparabolay( x )
+                #tfit = time_A_fit( nomA )
+                tfit = time_A_fit( realA )
+                print('%d %g %g %g %g\t%g %g\t%g %g\t%g %g %g %g %g %g %g %g' % (cho, x,y,t, nomA, y-yfit, t-tfit, yfit,tfit, realA, realA/nomA, bhpos[0],bhpos[1], starpos[0],starpos[1], dt, realdA), file=extf)
+
+        if needtimes is not None:
+            # how far to extend back?   Make a bunch of dA samples until time_A_fit(A) <= back_to_time
+            curA = crealAs[0]
+            curt = ctimes[0]
+            curx = cbsvec[0,0]
+
+            extA = [curA]
+            extt = [curt]
+            extx = [curx]
+            exty = [bsparabolay(curx)]
+
+            back_to_time = min( needtimes )
+
+            xstep = 0.5 * xbackward
+
+            prev_rvec = numpy.array( [curx, bsparabolay(curx), 0] )
+
+            while extt[-1] > back_to_time:
+                curx -= xstep
+                cury = bsparabolay(curx)
+                rvec = numpy.array( [curx, cury, 0] )
+                drvec = prev_rvec - rvec
+                cx = numpy.cross( rvec, drvec )
+                dA = numpy.sqrt( numpy.square(cx).sum() )
+                curA -= dA
+                extA.append( curA )
+                extt.append( time_A_fit( curA ) )
+                extx.append( curx )
+                exty.append( cury )
+                prev_rvec = rvec
+
+            # Now find the x and y values at which time = needtimes
+            # we reverse them so that numpy.interp() gets extt in ascending order
+            
+            exs = numpy.interp( needtimes, extt[::-1], extx[::-1] )
+            eys = numpy.interp( needtimes, extt[::-1], exty[::-1] )
+
+            iibase = numpy.where( chosen[1:] & ~chosen[:-1] )
+            ibase = iibase[0][0] if len(iibase[0]) > 0 else 0
+
+            prebh = numpy.zeros( (len(needtimes), len(self.bhents[0])) )
+            prestar = numpy.zeros( (len(needtimes), len(self.starents[0])) )
+
+            prestar[:,2:5] = self.starents[ibase,2:5]
+            prestar[:,1] = prebh[:,1] = needtimes
+            prebh[:,2] = prestar[:,2] + exs
+            prebh[:,3] = prestar[:,3] + eys
+
+            # Now trash the original bhents[] and starents[], replacing the early portion with the newly extended stuff.
+            # We don't fill in velocity or acceleration.
+            # We assume star position is constant before the 'fit' interval
+
+            self.bhents = numpy.vstack( (prebh, self.bhents[ibase:]) )
+            self.starents = numpy.vstack( (prestar, self.starents[ibase:]) )
+
+            # remember those prefixes, for debugging
+            self.prebh = prebh
+
+            return ibase
+
+        return None
 
     _interval_fields = ['srange', 'times', 'steps', 'pbh', 'pstar', 'ptranslate', 'pbh_S0offset', 'info_version']
     info_version = '0.8';
+ 
 
     def _load_interval_info(self, S0,S1):
 
@@ -291,7 +443,10 @@ if __name__ == '__main__':
     clampbeforestep = None
     outrange = (None, None)
     fitrange = (None, None)
+    extendrange = (None, None)
     origin = numpy.array( [0, 0, 0] )
+    force_recache = False
+    nthrun = 0
 
     ii = 1
 
@@ -311,6 +466,12 @@ if __name__ == '__main__':
             fitrange = frange_from( sys.argv[ii] ); ii += 1
         elif opt == '-clampbefore':
             clampbeforestep = int( sys.argv[ii] ); ii += 1
+        elif opt == '-recache':
+            force_recache = True
+        elif opt == '-nthrun':
+            nthrun = int( sys.argv[ii] ); ii += 1
+        elif opt == '-extend':
+            extendrange = [ float(s) for s in sys.argv[ii].replace(',',' ').split() ]; ii += 1
         elif opt == '-origin':
             ss = sys.argv[ii].replace(',', ' ').split(); ii += 1
             if len(ss) != 3:
@@ -328,7 +489,14 @@ if __name__ == '__main__':
 
     bhi = BHInfo( simdir )
 
-    bhi.use_interval( *fitrange )
+    bhi.use_interval( *fitrange, redo=force_recache )
+
+    if extendrange[0] is not None:
+        # for all the timestep times preceding extendrange[0]
+        pretimes = [steptime for steptime in bhi.times if steptime < extendrange[0]]
+        bhi.extend_orbit_back( *extendrange, nthrun=nthrun, needtimes=pretimes )
+        # Recompute
+        bhi.use_interval( *fitrange, redo=True )
 
     def my_bhinfo_at_step(step):
         mystep = step
