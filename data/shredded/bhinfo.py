@@ -199,8 +199,9 @@ class BHInfo(object):
             prebh[:,0] = 131072
             prestar[:,2:5] = self.starents[ibase,2:5]
             prestar[:,1] = prebh[:,1] = needtimes
-            prebh[:,2] = prestar[:,2] + exs
-            prebh[:,3] = prestar[:,3] + eys
+            prebh[:,2] = prestar[:,2] + exs     # x
+            prebh[:,3] = prestar[:,3] + eys     # y
+            prebh[:,4] = prestar[:,4]           # z
 
             # Now trash the original bhents[] and starents[], replacing the early portion with the newly extended stuff.
             # We don't fill in velocity or acceleration.
