@@ -10,6 +10,7 @@ quantpat = re.compile('vmax (\S+), vthresh (q\S+) => (\S+), for .* (\d\d\d\d)\s*
 infs = []
 outstem = 'isoplot'
 quants = None
+title = None
 
 ii = 1
 while ii<len(sys.argv) and sys.argv[ii][0] == '-':
@@ -18,6 +19,8 @@ while ii<len(sys.argv) and sys.argv[ii][0] == '-':
         outstem = sys.argv[ii]; ii += 1
     elif opt == '-i':
         infs.append( sys.argv[ii] ); ii += 1
+    elif opt == '-title':
+        title = sys.argv[ii]; ii += 1
     elif opt == '-q':
         ss = sys.argv[ii].replace(',',' ').split()
         quants = {}
@@ -51,15 +54,21 @@ if sval is None:
 
 print("Writing to %s.gnuplot + %s.dat" % (outstem,outstem))
 with open(outstem+'.dat', 'w') as datf, open(outstem+'.gnuplot', 'w') as pltf:
+    if title is not None:
+        print("set title '%s'" % title.replace("'","\\'"), file=pltf)
+    print("set xlabel 'frame number'", file=pltf)
+    print("set ylabel 'log_{10} density'", file=pltf)
+    
     for qstr in sorted(qvals.keys()):
         if qstr=='q0' or quants is None or qstr in quants:
             qplottags.append( qstr )
 
-            print(" =%s=" % qstr, file=datf)
+            print("# =%s=" % qstr, file=datf)
             for frameno in sorted(qvals[qstr].keys()):
                 print("%s %s" % (frameno, qvals[qstr][frameno]), file=datf)
             print("", file=datf)
 
-            title = 'max' if (qstr=='q0') else qstr
-            print("plot '%s.dat' index '=%s=' title '%s'" % (outstem, qstr, title), file=pltf)
-                       
+            title = 'max' if (qstr=='q0') else (("0." + qstr[1:]) if qstr.startswith('q') else qstr)
+            print("plot '%s.dat' index '=%s=' using 1:(log10($2)) title '%s'" % (outstem, qstr, title), file=pltf)
+
+
